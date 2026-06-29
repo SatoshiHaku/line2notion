@@ -217,7 +217,7 @@ async function createNotionPage(env, receipt, buyerName) {
 
   const amount = normalizeAmount(receipt["金額"]);
   const date = receipt["日付"] || null;
-  const memo = receipt["メモ"] || "レシート";
+  const memo = formatNotionMemo(receipt["メモ"], date);
   const category = receipt["カテゴリ"] || "未分類";
 
   const properties = {
@@ -336,6 +336,14 @@ function formatReceiptReply(receipt, notionUrl, buyerName) {
     `名前: ${buyerName || "未設定"}`,
     notionUrl ? `Notion: ${notionUrl}` : "Notionに登録しました。",
   ].join("\n");
+}
+
+function formatNotionMemo(memo, date) {
+  const memoText = memo || "レシート";
+  if (!date) return memoText;
+  if (memoText.includes(date)) return memoText;
+
+  return `${date} ${memoText}`;
 }
 
 function resolveBuyerName(env, userId) {
