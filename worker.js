@@ -64,14 +64,26 @@ async function handleLineEvent(event, env) {
         },
       ]);
 
-      const imageBytes = await fetchLineMessageContent(env, event.message.id);
-      console.log(`image bytes: ${imageBytes.byteLength}`);
+      const imageContent = await fetchLineMessageContent(env, event.message.id);
+      console.log(`image bytes: ${imageContent.bytes.byteLength}`);
 
-      const receipt = await analyzeReceiptWithOpenAI(env, imageBytes);
+      const receipt = await analyzeReceiptWithOpenAI(env, imageContent.bytes);
       console.log(`receipt parsed: ${JSON.stringify(receipt)}`);
 
+      const receiptFileUploadId = await uploadReceiptImageToNotion(
+        env,
+        imageContent.bytes,
+        imageContent.contentType
+      );
+      console.log(`receipt image uploaded: ${receiptFileUploadId}`);
+
       const buyerName = resolveBuyerName(env, event.source?.userId);
-      const notionUrl = await createNotionPage(env, receipt, buyerName);
+      const notionUrl = await createNotionPage(
+        env,
+        receipt,
+        buyerName,
+        receiptFileUploadId
+      );
       console.log(`Notion page created: ${notionUrl}`);
 
       await pushMessage(env, event.source.userId, [
@@ -154,7 +166,10 @@ async function fetchLineMessageContent(env, messageId) {
     throw new Error(`LINE content error: ${response.status} ${errorText}`);
   }
 
-  return response.arrayBuffer();
+  return {
+    bytes: await response.arrayBuffer(),
+    contentType: response.headers.get("content-type") || "image/jpeg",
+  };
 }
 
 async function analyzeReceiptWithOpenAI(env, imageBytes) {
@@ -210,7 +225,76 @@ async function analyzeReceiptWithOpenAI(env, imageBytes) {
   return JSON.parse(jsonText);
 }
 
-async function createNotionPage(env, receipt, buyerName) {
+async function uploadReceiptImageToNotion(env, imageBytes, contentType) {
+  if (!env.NOTION_API_KEY) {
+    throw new Error("Notion API key is missing");
+  }
+
+  const normalizedContentType = normalizeImageContentType(contentType);
+  const filename = `receipt-${new Date().toISOString().replace(/[:.]/g, "-")}.${extensionForContentType(normalizedContentType)}`;
+  const notionVersion = fileUploadNotionVersion(env);
+
+  const createResponse = await fetch("https://api.notion.com/v1/file_uploads", {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${env.NOTION_API_KEY}`,
+      "Content-Type": "application/json",
+      "Notion-Version": notionVersion,
+    },
+    body: JSON.stringify({
+      mode: "single_part",
+      filename,
+      content_type: normalizedContentType,
+    }),
+  });
+
+  const createData = await createResponse.json();
+  console.log(`Notion file upload create status: ${createResponse.status}`);
+
+  if (!createResponse.ok) {
+    console.log(JSON.stringify(createData));
+    throw new Error(
+      `Notion file upload create error: ${createResponse.status} ${createData.message || ""}`
+    );
+  }
+
+  const formData = new FormData();
+  formData.append(
+    "file",
+    new Blob([imageBytes], { type: normalizedContentType }),
+    filename
+  );
+
+  const sendResponse = await fetch(
+    `https://api.notion.com/v1/file_uploads/${createData.id}/send`,
+    {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${env.NOTION_API_KEY}`,
+        "Notion-Version": notionVersion,
+      },
+      body: formData,
+    }
+  );
+
+  const sendData = await sendResponse.json();
+  console.log(`Notion file upload send status: ${sendResponse.status}`);
+
+  if (!sendResponse.ok) {
+    console.log(JSON.stringify(sendData));
+    throw new Error(
+      `Notion file upload send error: ${sendResponse.status} ${sendData.message || ""}`
+    );
+  }
+
+  if (sendData.status && sendData.status !== "uploaded") {
+    throw new Error(`Notion file upload status: ${sendData.status}`);
+  }
+
+  return sendData.id || createData.id;
+}
+
+async function createNotionPage(env, receipt, buyerName, receiptFileUploadId) {
   if (!env.NOTION_API_KEY || !env.NOTION_DATABASE_ID) {
     throw new Error("Notion secrets are missing");
   }
@@ -263,12 +347,26 @@ async function createNotionPage(env, receipt, buyerName) {
     };
   }
 
+  if (receiptFileUploadId) {
+    properties[env.RECEIPT_FILE_PROPERTY_NAME || "レシートなど"] = {
+      files: [
+        {
+          name: "レシート画像",
+          type: "file_upload",
+          file_upload: {
+            id: receiptFileUploadId,
+          },
+        },
+      ],
+    };
+  }
+
   const response = await fetch("https://api.notion.com/v1/pages", {
     method: "POST",
     headers: {
       Authorization: `Bearer ${env.NOTION_API_KEY}`,
       "Content-Type": "application/json",
-      "Notion-Version": env.NOTION_VERSION || "2022-06-28",
+      "Notion-Version": pageNotionVersion(env),
     },
     body: JSON.stringify({
       parent: {
@@ -287,6 +385,37 @@ async function createNotionPage(env, receipt, buyerName) {
   }
 
   return data.url || "";
+}
+
+function pageNotionVersion(env) {
+  return env.NOTION_VERSION || "2026-03-11";
+}
+
+function fileUploadNotionVersion(env) {
+  return env.NOTION_FILE_UPLOAD_VERSION || "2026-03-11";
+}
+
+function normalizeImageContentType(contentType) {
+  const [type] = String(contentType || "").split(";");
+  const normalized = type.trim().toLowerCase();
+
+  if (normalized.startsWith("image/")) return normalized;
+  return "image/jpeg";
+}
+
+function extensionForContentType(contentType) {
+  const extensions = {
+    "image/jpeg": "jpg",
+    "image/jpg": "jpg",
+    "image/png": "png",
+    "image/heic": "heic",
+    "image/webp": "webp",
+    "image/gif": "gif",
+    "image/bmp": "bmp",
+    "image/tiff": "tiff",
+  };
+
+  return extensions[contentType] || "jpg";
 }
 
 function buildReceiptPrompt() {
