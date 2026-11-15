@@ -174,7 +174,7 @@ async function fetchLineMessageContent(env, messageId) {
 
 async function analyzeReceiptWithOpenAI(env, imageBytes) {
   const base64Image = arrayBufferToBase64(imageBytes);
-  const model = env.OPENAI_MODEL || "gpt-5.6-sol";
+  const model = env.OPENAI_MODEL || "gpt-6-luna";
   console.log(`calling OpenAI model: ${model}`);
 
   const response = await fetch("https://api.openai.com/v1/chat/completions", {
