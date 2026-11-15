@@ -174,7 +174,7 @@ async function fetchLineMessageContent(env, messageId) {
 
 async function analyzeReceiptWithOpenAI(env, imageBytes) {
   const base64Image = arrayBufferToBase64(imageBytes);
-  const model = env.OPENAI_MODEL || "gpt-4o-2024-05-13";
+  const model = env.OPENAI_MODEL || "gpt-5.6-sol";
   console.log(`calling OpenAI model: ${model}`);
 
   const response = await fetch("https://api.openai.com/v1/chat/completions", {
@@ -205,8 +205,8 @@ async function analyzeReceiptWithOpenAI(env, imageBytes) {
         },
       ],
       response_format: { type: "json_object" },
-      max_tokens: 300,
-      temperature: 0.1,
+      max_completion_tokens: 300,
+      reasoning_effort: "none",
     }),
   });
 
