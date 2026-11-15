@@ -174,55 +174,56 @@ async function fetchLineMessageContent(env, messageId) {
 
 async function analyzeReceiptWithOpenAI(env, imageBytes) {
   const base64Image = arrayBufferToBase64(imageBytes);
-  const model = env.OPENAI_MODEL || "gpt-6-luna";
-  console.log(`calling OpenAI model: ${model}`);
+  const preferredModel = env.OPENAI_MODEL || "gpt-5-nano";
+  const models = [preferredModel, "gpt-6-luna"];
 
-  const response = await fetch("https://api.openai.com/v1/chat/completions", {
-    method: "POST",
-    signal: AbortSignal.timeout(25000),
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${env.OPENAI_API_KEY}`,
-    },
-    body: JSON.stringify({
-      model,
-      messages: [
-        {
-          role: "user",
-          content: [
-            {
-              type: "text",
-              text: buildReceiptPrompt(),
-            },
-            {
-              type: "image_url",
-              image_url: {
-                url: `data:image/jpeg;base64,${base64Image}`,
-                detail: "low",
+  for (const model of [...new Set(models)]) {
+    console.log(`calling OpenAI model: ${model}`);
+    const response = await fetch("https://api.openai.com/v1/chat/completions", {
+      method: "POST",
+      signal: AbortSignal.timeout(25000),
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${env.OPENAI_API_KEY}`,
+      },
+      body: JSON.stringify({
+        model,
+        messages: [
+          {
+            role: "user",
+            content: [
+              { type: "text", text: buildReceiptPrompt() },
+              {
+                type: "image_url",
+                image_url: {
+                  url: `data:image/jpeg;base64,${base64Image}`,
+                  detail: "low",
+                },
               },
-            },
-          ],
-        },
-      ],
-      response_format: { type: "json_object" },
-      max_completion_tokens: 300,
-      reasoning_effort: "none",
-    }),
-  });
+            ],
+          },
+        ],
+        response_format: { type: "json_object" },
+        max_completion_tokens: model === "gpt-5-nano" ? 700 : 300,
+        reasoning_effort: model === "gpt-5-nano" ? "minimal" : "none",
+      }),
+    });
 
-  const data = await response.json();
-  console.log(`OpenAI status: ${response.status}`);
+    const data = await response.json();
+    console.log(`OpenAI status: ${response.status}`);
 
-  if (!response.ok) {
-    console.log(JSON.stringify(data));
-    throw new Error(`OpenAI error: ${response.status}`);
+    if (!response.ok) {
+      console.log(JSON.stringify(data));
+      if (model !== "gpt-6-luna" && response.status === 404) continue;
+      throw new Error(`OpenAI error: ${response.status}`);
+    }
+
+    const text = data.choices?.[0]?.message?.content || "";
+    console.log(`OpenAI text length: ${text.length}`);
+    return JSON.parse(extractJsonObject(text));
   }
 
-  const text = data.choices?.[0]?.message?.content || "";
-  console.log(`OpenAI text length: ${text.length}`);
-
-  const jsonText = extractJsonObject(text);
-  return JSON.parse(jsonText);
+  throw new Error("OpenAI models are unavailable");
 }
 
 async function uploadReceiptImageToNotion(env, imageBytes, contentType) {
